@@ -2565,7 +2565,7 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
           conteudo: payload
         }]);
 
-        const res = await fetch(SUPABASE_ENDPOINT, {
+        const res = await fetch(`${SUPABASE_ENDPOINT}?on_conflict=chave`, {
           method: 'POST',
           headers: {
             'apikey': SUPABASE_KEY,
