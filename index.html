@@ -935,8 +935,115 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
       anonKey: 'sb_publishable_c9f6Qfsz031Na8ZfHhwGJQ_DcV6rrwl'
     };
 
+    // CORREÇÃO 1 & 2: Normalização canônica de data e data local do dispositivo
+    function fnHojeLocal() {
+      const d = new Date();
+      return { dia: d.getDate(), mes: d.getMonth() + 1, ano: d.getFullYear() };
+    }
+
+    function fnFormatarDataBr(objData) {
+      if (!objData) return '';
+      const d = String(objData.dia).padStart(2, '0');
+      const m = String(objData.mes).padStart(2, '0');
+      const a = objData.ano;
+      return `${d}/${m}/${a}`;
+    }
+
+    function fnNormalizarData(valorData) {
+      if (valorData === undefined || valorData === null || valorData === '') return null;
+
+      // 1. Objeto Date válido já existente (extrair local, nunca UTC)
+      if (valorData instanceof Date && !isNaN(valorData.getTime())) {
+        return {
+          dia: valorData.getDate(),
+          mes: valorData.getMonth() + 1,
+          ano: valorData.getFullYear()
+        };
+      }
+
+      // 2. Serial numérico do Excel (base 1899-12-30 + fração de dia)
+      if (typeof valorData === 'number' || (!isNaN(valorData) && !isNaN(parseFloat(valorData)) && typeof valorData === 'string' && /^\d+(\.\d+)?$/.test(valorData.trim()))) {
+        const num = parseFloat(valorData);
+        if (num >= 10000 && num <= 90000) {
+          const d = new Date(Math.round((num - 25569) * 86400 * 1000));
+          if (!isNaN(d.getTime())) {
+            return {
+              dia: d.getUTCDate(),
+              mes: d.getUTCMonth() + 1,
+              ano: d.getUTCFullYear()
+            };
+          }
+        }
+      }
+
+      const s = String(valorData).trim();
+      if (!s) return null;
+
+      // 3. Texto "DD/MM/AAAA" ou "DD/MM/AAAA HH:MM:SS" (regex direta)
+      const mBr4 = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/);
+      if (mBr4) {
+        const dia = parseInt(mBr4[1], 10);
+        const mes = parseInt(mBr4[2], 10);
+        const ano = parseInt(mBr4[3], 10);
+        if (dia >= 1 && dia <= 31 && mes >= 1 && mes <= 12 && ano >= 1900 && ano <= 2100) {
+          return { dia, mes, ano };
+        }
+      }
+
+      // 4. Texto "DD/MM/AA" (ano 2 dígitos -> 20YY)
+      const mBr2 = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2})(?!\d)/);
+      if (mBr2) {
+        const dia = parseInt(mBr2[1], 10);
+        const mes = parseInt(mBr2[2], 10);
+        const yy = parseInt(mBr2[3], 10);
+        const ano = 2000 + yy;
+        if (dia >= 1 && dia <= 31 && mes >= 1 && mes <= 12) {
+          return { dia, mes, ano };
+        }
+      }
+
+      // 5. Texto "AAAA-MM-DD" ou ISO "AAAA-MM-DDTHH:MM:SS"
+      const mIso = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+      if (mIso) {
+        const ano = parseInt(mIso[1], 10);
+        const mes = parseInt(mIso[2], 10);
+        const dia = parseInt(mIso[3], 10);
+        if (dia >= 1 && dia <= 31 && mes >= 1 && mes <= 12 && ano >= 1900 && ano <= 2100) {
+          return { dia, mes, ano };
+        }
+      }
+
+      // 6. Texto "DD/MM" sem ano -> assumir ano corrente local
+      const mDiaMes = s.match(/^(\d{1,2})[\/\-](\d{1,2})$/);
+      if (mDiaMes) {
+        const dia = parseInt(mDiaMes[1], 10);
+        const mes = parseInt(mDiaMes[2], 10);
+        const ano = new Date().getFullYear();
+        if (dia >= 1 && dia <= 31 && mes >= 1 && mes <= 12) {
+          return { dia, mes, ano };
+        }
+      }
+
+      return null;
+    }
+
+    // CORREÇÃO 3: Filtro do Parcial do Dia com fallback seguro
+    function fnEhHoje(registro) {
+      if (!registro) return false;
+      let dNorm = fnNormalizarData(registro.data_abreviada);
+      if (!dNorm) {
+        dNorm = fnNormalizarData(registro.created_at);
+      }
+      if (!dNorm) return false;
+      const hoje = fnHojeLocal();
+      return dNorm.dia === hoje.dia && dNorm.mes === hoje.mes && dNorm.ano === hoje.ano;
+    }
+
+    const _hojeInicial = fnHojeLocal();
+    const _mesInicialRef = `${_hojeInicial.ano}/${String(_hojeInicial.mes).padStart(2, '0')}`;
+
     let appState = {
-      filtroMesRef: '2025/03',
+      filtroMesRef: _mesInicialRef,
       filtroRegional: 'TODAS',
       filtroGrupo: 'TODOS',
       filtroUF: 'TODOS',
@@ -1022,34 +1129,57 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
       ];
 
       const lista = [];
-      const mes = '2025/03';
-      const hojeStr = '2025-03-24';
+      const hoje = fnHojeLocal();
+      const hojeDiaStr = String(hoje.dia).padStart(2, '0');
+      const hojeMesStr = String(hoje.mes).padStart(2, '0');
+      const hojeAno = hoje.ano;
+      const hojeDataIso = `${hojeAno}-${hojeMesStr}-${hojeDiaStr}`;
+      const hojeDataBr = `${hojeDiaStr}/${hojeMesStr}/${hojeAno}`;
+      const hojeMesRef = `${hojeAno}/${hojeMesStr}`;
       let idCounter = 1;
 
-      regioesConfig.forEach(rc => {
+      regioesConfig.forEach((rc, rIdx) => {
         rc.cidades.forEach((cidade, cIdx) => {
           const franqNome = cidade + ' - CENTRO';
           const franqUF = rc.ufs[cIdx % rc.ufs.length];
-          const qtdRegistros = Math.floor(Math.random() * 22) + 6;
+          const qtdRegistros = Math.floor(Math.random() * 18) + 6;
 
           for (let i = 0; i < qtdRegistros; i++) {
-            const diaNum = Math.floor(Math.random() * 24) + 1;
+            const diaNum = Math.floor(Math.random() * Math.max(1, hoje.dia)) + 1;
             const diaStr = diaNum < 10 ? '0' + diaNum : '' + diaNum;
-            const dataStr = '2025-03-' + diaStr;
+            const dataIso = `${hojeAno}-${hojeMesStr}-${diaStr}`;
+            const dataBr = `${diaStr}/${hojeMesStr}/${hojeAno}`;
             const status = statusPossiveis[Math.floor(Math.random() * statusPossiveis.length)];
             const vendedor = vendedoresNomes[(cIdx + i) % vendedoresNomes.length];
 
             lista.push({
               id: idCounter++,
-              mes_ref: mes,
+              mes_ref: hojeMesRef,
               regional: rc.reg,
               subregional_subregional: rc.grupo,
               franquia_nome: franqNome,
               franquia_uf: franqUF,
               vendedor_nome: vendedor,
               status_venda: status,
-              created_at: dataStr + ' 14:20:00',
-              data_abreviada: dataStr
+              created_at: dataIso + ' 14:20:00',
+              data_abreviada: dataBr
+            });
+          }
+
+          // Inserir registros expressos para hoje em várias franquias para o Parcial do Dia ter dados reais
+          if ((cIdx + rIdx) % 2 === 0) {
+            const statusHoje = (cIdx % 3 === 0) ? 'APPROVED' : (cIdx % 3 === 1 ? 'AWAITING_PORTABILITY' : 'AWAITING_PAYMENT');
+            lista.push({
+              id: idCounter++,
+              mes_ref: hojeMesRef,
+              regional: rc.reg,
+              subregional_subregional: rc.grupo,
+              franquia_nome: franqNome,
+              franquia_uf: franqUF,
+              vendedor_nome: vendedoresNomes[cIdx % vendedoresNomes.length],
+              status_venda: statusHoje,
+              created_at: hojeDataIso + ' 10:45:00',
+              data_abreviada: hojeDataBr
             });
           }
         });
@@ -1058,7 +1188,172 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
       return lista;
     }
 
-    // Supabase REST client methods
+    // Helper: cabeçalhos padrão Supabase REST
+    function fnSyncGetHeaders() {
+      return {
+        'apikey': SUPABASE_CONFIG.anonKey,
+        'Authorization': `Bearer ${SUPABASE_CONFIG.anonKey}`,
+        'Content-Type': 'application/json'
+      };
+    }
+
+    // Helper: conversão segura do jsonb para objeto
+    function fnParseConteudoSupabase(conteudo) {
+      if (conteudo === undefined || conteudo === null) return null;
+      if (typeof conteudo === 'object') return conteudo;
+      if (typeof conteudo === 'string') {
+        try {
+          return JSON.parse(conteudo);
+        } catch (e) {
+          console.warn('Erro ao converter jsonb string:', e);
+          return null;
+        }
+      }
+      return null;
+    }
+
+    // 1. fnSyncLerChaves(chaves[]): GET .../dados?select=chave,conteudo com apikey + Authorization
+    async function fnSyncLerChaves(chaves = []) {
+      const mapa = {};
+      let url = `${SUPABASE_CONFIG.url}/rest/v1/dados?select=chave,conteudo`;
+      if (Array.isArray(chaves) && chaves.length > 0) {
+        const chavesParam = chaves.map(c => `"${encodeURIComponent(String(c).trim())}"`).join(',');
+        url += `&chave=in.(${chavesParam})`;
+      }
+
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: fnSyncGetHeaders()
+      });
+
+      if (!res.ok) {
+        const errTxt = await res.text().catch(() => '');
+        throw new Error(`HTTP ${res.status}: ${errTxt || res.statusText}`);
+      }
+
+      const lista = await res.json();
+      if (Array.isArray(lista)) {
+        lista.forEach(item => {
+          if (item && item.chave) {
+            mapa[item.chave] = fnParseConteudoSupabase(item.conteudo);
+          }
+        });
+      }
+      return mapa;
+    }
+
+    // Helper de escrita PATCH por chave (NUNCA envia coluna id, apenas conteudo e atualizado_em)
+    async function fnSyncPATCH(chave, conteudo) {
+      const url = `${SUPABASE_CONFIG.url}/rest/v1/dados?chave=eq.${encodeURIComponent(String(chave).trim())}`;
+      const payloadPatch = {
+        conteudo: conteudo,
+        atualizado_em: new Date().toISOString()
+      };
+      return await fetch(url, {
+        method: 'PATCH',
+        headers: {
+          ...fnSyncGetHeaders(),
+          'Prefer': 'return=minimal'
+        },
+        body: JSON.stringify(payloadPatch)
+      });
+    }
+
+    // Helper de escrita POST para nova chave (NUNCA envia id, APENAS { chave, conteudo, atualizado_em }, SEM on_conflict)
+    async function fnSyncPOST(chave, conteudo) {
+      const url = `${SUPABASE_CONFIG.url}/rest/v1/dados`;
+      const payloadPost = {
+        chave: String(chave).trim(),
+        conteudo: conteudo,
+        atualizado_em: new Date().toISOString()
+      };
+      return await fetch(url, {
+        method: 'POST',
+        headers: {
+          ...fnSyncGetHeaders(),
+          'Prefer': 'return=minimal'
+        },
+        body: JSON.stringify(payloadPost)
+      });
+    }
+
+    // 2. fnSyncSalvarChave(chave, conteudo): fluxo ler-antes-de-escrever idempotente
+    async function fnSyncSalvarChave(chave, conteudo, tentativa = 1) {
+      const chaveNorm = String(chave).trim();
+      try {
+        // a) Consultar se a chave já existe: GET .../dados?select=chave&chave=eq.<chave>
+        const urlCheck = `${SUPABASE_CONFIG.url}/rest/v1/dados?select=chave&chave=eq.${encodeURIComponent(chaveNorm)}`;
+        let resCheck = await fetch(urlCheck, {
+          method: 'GET',
+          headers: fnSyncGetHeaders()
+        });
+
+        // Retry 1 vez para falha de rede/5xx/401/403
+        if (!resCheck.ok && (resCheck.status >= 500 || resCheck.status === 401 || resCheck.status === 403 || resCheck.status === 408) && tentativa === 1) {
+          await new Promise(r => setTimeout(r, 400));
+          return await fnSyncSalvarChave(chaveNorm, conteudo, 2);
+        }
+
+        let jaExiste = false;
+        if (resCheck.ok) {
+          const checkList = await resCheck.json();
+          jaExiste = Array.isArray(checkList) && checkList.length > 0;
+        }
+
+        // b) Se já existe -> PATCH
+        if (jaExiste) {
+          let resPatch = await fnSyncPATCH(chaveNorm, conteudo);
+          if (resPatch.ok) {
+            return { ok: true, metodo: 'patch', chave: chaveNorm };
+          }
+          if (resPatch.status === 404) {
+            jaExiste = false;
+          } else {
+            const errTxt = await resPatch.text().catch(() => '');
+            if (tentativa === 1 && (resPatch.status >= 500 || resPatch.status === 401 || resPatch.status === 403)) {
+              await new Promise(r => setTimeout(r, 400));
+              return await fnSyncSalvarChave(chaveNorm, conteudo, 2);
+            }
+            return { ok: false, status: resPatch.status, erro: errTxt || `HTTP ${resPatch.status}`, chave: chaveNorm };
+          }
+        }
+
+        // c) Se NÃO existe -> POST (sem on_conflict por padrão)
+        if (!jaExiste) {
+          let resPost = await fnSyncPOST(chaveNorm, conteudo);
+          if (resPost.ok) {
+            return { ok: true, metodo: 'insert', chave: chaveNorm };
+          }
+
+          // d) Se o POST retornar 409 (corrida entre leitura e escrita), tentar PATCH imediatamente
+          if (resPost.status === 409) {
+            let resPatchCorrida = await fnSyncPATCH(chaveNorm, conteudo);
+            if (resPatchCorrida.ok) {
+              return { ok: true, metodo: 'patch', recuperado409: true, chave: chaveNorm };
+            }
+            const errCorrida = await resPatchCorrida.text().catch(() => '');
+            return { ok: false, status: resPatchCorrida.status, erro: errCorrida || `HTTP ${resPatchCorrida.status}`, chave: chaveNorm };
+          }
+
+          // Retry transitório para POST
+          if (tentativa === 1 && (resPost.status >= 500 || resPost.status === 401 || resPost.status === 403)) {
+            await new Promise(r => setTimeout(r, 400));
+            return await fnSyncSalvarChave(chaveNorm, conteudo, 2);
+          }
+
+          const errPost = await resPost.text().catch(() => '');
+          return { ok: false, status: resPost.status, erro: errPost || `HTTP ${resPost.status}`, chave: chaveNorm };
+        }
+      } catch (err) {
+        if (tentativa === 1) {
+          await new Promise(r => setTimeout(r, 400));
+          return await fnSyncSalvarChave(chaveNorm, conteudo, 2);
+        }
+        return { ok: false, rede: true, status: 0, erro: err.message || 'Falha de rede', chave: chaveNorm };
+      }
+    }
+
+    // Sincronização centralizada sequencial de múltiplas chaves com mensagens corretas
     async function fnSalvarNoSupabase() {
       const syncText = document.getElementById('syncText');
       const syncDot = document.querySelector('.sync-dot');
@@ -1066,9 +1361,9 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
 
       if (syncText) syncText.textContent = 'Sincronizando…';
       if (syncDot) syncDot.style.backgroundColor = '#F59E0B';
-      if (logBox) logBox.innerHTML += '<br>[INFO] Iniciando sincronização com Supabase...';
+      if (logBox) logBox.innerHTML += '<br>[INFO] Iniciando sincronização sequencial com Supabase...';
 
-      const payload = {
+      const payloadMaster = {
         metasRegionais: storeMetasRegionais,
         metasGrupos: storeMetasGrupos,
         metasFranquias: storeMetasFranquias,
@@ -1077,83 +1372,166 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         atualizado_em: new Date().toISOString()
       };
 
-      try {
-        const response = await fetch(`${SUPABASE_CONFIG.url}/rest/v1/dados`, {
-          method: 'POST',
-          headers: {
-            'apikey': SUPABASE_CONFIG.anonKey,
-            'Authorization': `Bearer ${SUPABASE_CONFIG.anonKey}`,
-            'Content-Type': 'application/json',
-            'Prefer': 'resolution=merge-duplicates'
-          },
-          body: JSON.stringify({
-            chave: 'cross_selling_master_data',
-            conteudo: payload,
-            atualizado_em: new Date().toISOString()
-          })
-        });
+      const payloadBaseVendas = {
+        total: storeVendas.length,
+        vendas: storeVendas.slice(0, 2000),
+        atualizado_em: new Date().toISOString()
+      };
 
-        if (!response.ok) {
-          throw new Error('Falha na resposta HTTP: ' + response.status);
+      const chavesParaSalvar = [
+        { chave: 'cross_selling_master_data', conteudo: payloadMaster },
+        { chave: 'base_vendas', conteudo: payloadBaseVendas },
+        { chave: 'metas_regionais', conteudo: storeMetasRegionais },
+        { chave: 'metas_grupos', conteudo: storeMetasGrupos },
+        { chave: 'metas_franquias', conteudo: storeMetasFranquias }
+      ];
+
+      let todasOk = true;
+      let houveFalhaRede = false;
+      let houveAlertaUnique = false;
+      let houveErroPermissao = false;
+
+      for (const item of chavesParaSalvar) {
+        const resultado = await fnSyncSalvarChave(item.chave, item.conteudo);
+
+        if (resultado.ok) {
+          if (logBox) {
+            logBox.innerHTML += `<br><span style="color:#34D399;">[OK] Sincronização concluída — chave "${resultado.chave}" atualizada (${resultado.metodo})</span>`;
+          }
+        } else {
+          todasOk = false;
+          const msgErro = String(resultado.erro || '');
+          const isUniqueConstraint = /unique|constraint|on conflict|P0001/i.test(msgErro);
+          const isPermissao = resultado.status === 401 || resultado.status === 403;
+          const isRedeOu5xx = resultado.rede || (resultado.status >= 500) || resultado.status === 0;
+
+          if (isUniqueConstraint) {
+            houveAlertaUnique = true;
+            if (logBox) {
+              logBox.innerHTML += `<br><span style="color:#FBBF24;">[ATENÇÃO] A coluna chave da tabela dados precisa de restrição UNIQUE no Supabase. Rode no SQL Editor: ALTER TABLE public.dados ADD CONSTRAINT dados_chave_key UNIQUE (chave);</span>`;
+            }
+          } else if (isRedeOu5xx) {
+            houveFalhaRede = true;
+            if (logBox) {
+              logBox.innerHTML += `<br><span style="color:#F87171;">[AVISO] Supabase indisponível. Usando cache local: ${msgErro}</span>`;
+            }
+          } else if (isPermissao) {
+            houveErroPermissao = true;
+            if (logBox) {
+              logBox.innerHTML += `<br><span style="color:#F87171;">[AVISO] Não foi possível salvar no Supabase (${resultado.status} ${msgErro}). Verifique as políticas de segurança (RLS) e permissões da chave anon na tabela dados. Usando cache local.</span>`;
+            }
+          } else {
+            if (logBox) {
+              logBox.innerHTML += `<br><span style="color:#F87171;">[AVISO] Não foi possível salvar no Supabase (${resultado.status || 'erro'} ${msgErro}). Verifique as permissões da chave anon na tabela dados. Usando cache local.</span>`;
+            }
+          }
         }
+      }
 
-        if (syncText) syncText.textContent = 'Salvo no Supabase';
-        if (syncDot) syncDot.style.backgroundColor = '#10B981';
-        if (logBox) logBox.innerHTML += '<br><span style="color:#34D399;">[OK] Sincronização concluída com sucesso!</span>';
-        fnSalvarCache('cache_metas_regionais', storeMetasRegionais);
-        fnSalvarCache('cache_metas_grupos', storeMetasGrupos);
-        fnSalvarCache('cache_metas_franquias', storeMetasFranquias);
-      } catch (err) {
-        console.warn('Erro ao salvar no Supabase, mantendo local:', err);
-        if (syncText) syncText.textContent = 'Offline — cache local';
-        if (syncDot) syncDot.style.backgroundColor = '#64748B';
-        if (logBox) logBox.innerHTML += `<br><span style="color:#F87171;">[AVISO] Supabase indisponível. Usando cache local: ${err.message}</span>`;
+      // Persistência em cache local sempre protegida com try/catch
+      try {
         fnSalvarCache('cache_metas_regionais', storeMetasRegionais);
         fnSalvarCache('cache_metas_grupos', storeMetasGrupos);
         fnSalvarCache('cache_metas_franquias', storeMetasFranquias);
         fnSalvarCache('cache_vendas_data', storeVendas);
+      } catch (eCache) {
+        console.warn('Erro ao atualizar cache local:', eCache);
+      }
+
+      if (todasOk) {
+        if (syncText) syncText.textContent = 'Salvo no Supabase';
+        if (syncDot) syncDot.style.backgroundColor = '#10B981';
+      } else if (houveFalhaRede) {
+        if (syncText) syncText.textContent = 'Supabase indisponível';
+        if (syncDot) syncDot.style.backgroundColor = '#64748B';
+      } else if (houveErroPermissao) {
+        if (syncText) syncText.textContent = 'RLS / Sem permissão';
+        if (syncDot) syncDot.style.backgroundColor = '#EF4444';
+      } else {
+        if (syncText) syncText.textContent = 'Cache local ativo';
+        if (syncDot) syncDot.style.backgroundColor = '#F59E0B';
       }
     }
 
+    // Leitura preferindo Supabase usando fnSyncLerChaves
     async function fnRecarregarDoSupabase() {
       const logBox = document.getElementById('syncLog');
-      if (logBox) logBox.innerHTML += '<br>[INFO] Consultando Supabase...';
+      const syncText = document.getElementById('syncText');
+      const syncDot = document.querySelector('.sync-dot');
+
+      if (logBox) logBox.innerHTML += '<br>[INFO] Consultando Supabase via fnSyncLerChaves...';
       try {
-        const response = await fetch(`${SUPABASE_CONFIG.url}/rest/v1/dados?chave=eq.cross_selling_master_data&select=*`, {
-          headers: {
-            'apikey': SUPABASE_CONFIG.anonKey,
-            'Authorization': `Bearer ${SUPABASE_CONFIG.anonKey}`
-          }
-        });
-        if (!response.ok) throw new Error('Status ' + response.status);
-        const data = await response.json();
-        if (data && data.length > 0 && data[0].conteudo) {
-          const item = data[0].conteudo;
-          if (item.metasRegionais) storeMetasRegionais = item.metasRegionais;
-          if (item.metasGrupos) storeMetasGrupos = item.metasGrupos;
-          if (item.metasFranquias) storeMetasFranquias = item.metasFranquias;
-          if (item.vendasSample && item.vendasSample.length > 0) storeVendas = item.vendasSample;
+        const mapa = await fnSyncLerChaves();
+        let dadosEncontrados = false;
+
+        if (mapa && Object.keys(mapa).length > 0) {
+          Object.keys(mapa).forEach(k => {
+            const chave = k.toLowerCase().trim();
+            const conteudo = mapa[k];
+            if (!conteudo) return;
+
+            if (chave === 'cross_selling_master_data') {
+              if (conteudo.metasRegionais) storeMetasRegionais = conteudo.metasRegionais;
+              if (conteudo.metasGrupos) storeMetasGrupos = conteudo.metasGrupos;
+              if (conteudo.metasFranquias) storeMetasFranquias = conteudo.metasFranquias;
+              if (Array.isArray(conteudo.vendasSample) && conteudo.vendasSample.length > 0) {
+                storeVendas = conteudo.vendasSample;
+              } else if (Array.isArray(conteudo.vendas) && conteudo.vendas.length > 0) {
+                storeVendas = conteudo.vendas;
+              }
+              dadosEncontrados = true;
+            } else if (chave === 'meta_regionais' || chave === 'metas_regionais') {
+              storeMetasRegionais = conteudo;
+              dadosEncontrados = true;
+            } else if (chave === 'metas_grupos' || chave === 'meta_grupos') {
+              storeMetasGrupos = conteudo;
+              dadosEncontrados = true;
+            } else if (chave === 'metas_franquias' || chave === 'meta_franquias') {
+              storeMetasFranquias = conteudo;
+              dadosEncontrados = true;
+            } else if (chave === 'base_vendas' || chave === 'base_de_vendas' || chave === 'vendas') {
+              if (Array.isArray(conteudo) && conteudo.length > 0) {
+                storeVendas = conteudo;
+                dadosEncontrados = true;
+              } else if (Array.isArray(conteudo.vendas) && conteudo.vendas.length > 0) {
+                storeVendas = conteudo.vendas;
+                dadosEncontrados = true;
+              }
+            }
+          });
+        }
+
+        if (dadosEncontrados) {
           if (logBox) logBox.innerHTML += '<br><span style="color:#34D399;">[OK] Dados carregados do Supabase com sucesso!</span>';
+          if (syncText) syncText.textContent = 'Salvo no Supabase';
+          if (syncDot) syncDot.style.backgroundColor = '#10B981';
           fnPreencherCamposAdmin();
           fnPopularFiltros();
           fnRenderizarAbaAtiva();
           return;
         }
       } catch (e) {
-        if (logBox) logBox.innerHTML += `<br>[AVISO] Consulta ao Supabase falhou (${e.message}). Buscando cache local...`;
+        if (logBox) logBox.innerHTML += `<br>[AVISO] Supabase indisponível. Usando cache local: ${e.message}`;
+        if (syncText) syncText.textContent = 'Supabase indisponível';
+        if (syncDot) syncDot.style.backgroundColor = '#64748B';
       }
 
-      // Local fallback
-      const cReg = fnCarregarCache('cache_metas_regionais');
-      const cGrp = fnCarregarCache('cache_metas_grupos');
-      const cFrq = fnCarregarCache('cache_metas_franquias');
-      const cVen = fnCarregarCache('cache_vendas_data');
+      // Fallback seguro em cache local
+      try {
+        const cReg = fnCarregarCache('cache_metas_regionais');
+        const cGrp = fnCarregarCache('cache_metas_grupos');
+        const cFrq = fnCarregarCache('cache_metas_franquias');
+        const cVen = fnCarregarCache('cache_vendas_data');
 
-      if (cReg) storeMetasRegionais = cReg;
-      if (cGrp) storeMetasGrupos = cGrp;
-      if (cFrq) storeMetasFranquias = cFrq;
-      if (cVen && cVen.length > 0) storeVendas = cVen;
-      else if (!storeVendas || storeVendas.length === 0) storeVendas = fnGerarMockPadrao();
+        if (cReg) storeMetasRegionais = cReg;
+        if (cGrp) storeMetasGrupos = cGrp;
+        if (cFrq) storeMetasFranquias = cFrq;
+        if (cVen && cVen.length > 0) storeVendas = cVen;
+        else if (!storeVendas || storeVendas.length === 0) storeVendas = fnGerarMockPadrao();
+      } catch (eCacheFallback) {
+        console.warn('Erro ao ler cache local de fallback:', eCacheFallback);
+        if (!storeVendas || storeVendas.length === 0) storeVendas = fnGerarMockPadrao();
+      }
 
       fnPreencherCamposAdmin();
       fnPopularFiltros();
@@ -1331,10 +1709,23 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         }
         if (appState.filtroUF !== 'TODOS' && item.franquia_uf !== appState.filtroUF) return false;
         if (appState.filtroFranquia !== 'TODAS' && item.franquia_nome !== appState.filtroFranquia) return false;
-        if (appState.visOperacional === 'parcial') {
-          const hoje = '2025-03-24'; // Mocked or current day comparison
-          if (item.data_abreviada !== hoje) return false;
+        return true;
+      });
+    }
+
+    function fnFiltrarBaseHoje() {
+      return storeVendas.filter(item => {
+        if (!fnEhHoje(item)) return false;
+        if (appState.filtroRegional !== 'TODAS') {
+          if (item.regional !== appState.filtroRegional) return false;
+        } else {
+          if (!REGIONAIS_VALIDAS.has(item.regional)) return false;
         }
+        if (appState.filtroRegional === 'EQUATORIAL' && appState.filtroGrupo !== 'TODOS') {
+          if (item.subregional_subregional !== appState.filtroGrupo) return false;
+        }
+        if (appState.filtroUF !== 'TODOS' && item.franquia_uf !== appState.filtroUF) return false;
+        if (appState.filtroFranquia !== 'TODAS' && item.franquia_nome !== appState.filtroFranquia) return false;
         return true;
       });
     }
@@ -1455,73 +1846,22 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
 
     // Normalização e extração segura de data real para registros
     function fnParseDataRegistro(val) {
-      if (val === undefined || val === null || val === '') return null;
-      if (val instanceof Date && !isNaN(val.getTime())) {
-        return {
-          dia: val.getDate(),
-          mes: val.getMonth() + 1,
-          ano: val.getFullYear(),
-          date: val
-        };
-      }
-
-      // Serial numérico do Excel (base 1899-12-30)
-      if (typeof val === 'number' || (!isNaN(val) && !isNaN(parseFloat(val)) && typeof val === 'string' && /^\d+(\.\d+)?$/.test(val.trim()))) {
-        const num = parseFloat(val);
-        if (num >= 10000 && num <= 90000) {
-          const d = new Date(Math.round((num - 25569) * 86400 * 1000));
-          if (!isNaN(d.getTime())) {
-            const dia = d.getUTCDate();
-            const mes = d.getUTCMonth() + 1;
-            const ano = d.getUTCFullYear();
-            return {
-              dia, mes, ano,
-              date: new Date(ano, mes - 1, dia)
-            };
-          }
-        }
-      }
-
-      const s = String(val).trim();
-      if (!s) return null;
-
-      // BR: DD/MM/AAAA ou DD/MM/AAAA HH:MM:SS (parse via regex, nunca new Date direto)
-      const mBr = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/);
-      if (mBr) {
-        const dia = parseInt(mBr[1], 10);
-        const mes = parseInt(mBr[2], 10);
-        const ano = parseInt(mBr[3], 10);
-        if (mes >= 1 && mes <= 12 && dia >= 1 && dia <= 31 && ano >= 1900 && ano <= 2100) {
-          return {
-            dia, mes, ano,
-            date: new Date(ano, mes - 1, dia)
-          };
-        }
-      }
-
-      // ISO: AAAA-MM-DD ou AAAA/MM/DD
-      const mIso = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
-      if (mIso) {
-        const ano = parseInt(mIso[1], 10);
-        const mes = parseInt(mIso[2], 10);
-        const dia = parseInt(mIso[3], 10);
-        if (mes >= 1 && mes <= 12 && dia >= 1 && dia <= 31 && ano >= 1900 && ano <= 2100) {
-          return {
-            dia, mes, ano,
-            date: new Date(ano, mes - 1, dia)
-          };
-        }
-      }
-
-      return null;
+      const norm = fnNormalizarData(val);
+      if (!norm) return null;
+      return {
+        dia: norm.dia,
+        mes: norm.mes,
+        ano: norm.ano,
+        date: new Date(norm.ano, norm.mes - 1, norm.dia)
+      };
     }
 
-    // Extrator confiável de dia do mês (1..totalDiasMes) para o item filtrado
+    // Extrator confiável de dia do mês (1..totalDiasMes) para o item filtrado usando fnNormalizarData
     function fnExtrairDiaItem(item, anoRef, mesRefNum, totalDiasMes) {
       const fontes = [item.data_abreviada, item.created_at];
       for (const f of fontes) {
         if (!f) continue;
-        const p = fnParseDataRegistro(f);
+        const p = fnNormalizarData(f);
         if (p && p.dia >= 1 && p.dia <= totalDiasMes) {
           if (p.ano && p.mes) {
             if (p.ano === anoRef && p.mes === mesRefNum) {
@@ -1535,7 +1875,7 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
       return null;
     }
 
-    // Cálculo dinâmico do recorte e contagem real de dias úteis restantes no mês
+    // Cálculo dinâmico do recorte e contagem real de dias úteis restantes no mês usando fnNormalizarData
     function fnCalcularRecorteDados(baseRegistros, anoRef, mesRefNum, totalDiasMes) {
       let maxDia = 0;
 
@@ -1543,7 +1883,7 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         const fontes = [item.data_abreviada, item.created_at];
         for (const f of fontes) {
           if (!f) continue;
-          const p = fnParseDataRegistro(f);
+          const p = fnNormalizarData(f);
           if (p && p.dia >= 1 && p.dia <= totalDiasMes) {
             if (p.ano && p.mes && (p.ano !== anoRef || p.mes !== mesRefNum)) {
               continue;
@@ -2142,9 +2482,185 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
 
     // VIEW 2: OPERACIONAL — DESEMPENHO POR FRANQUIA
     function fnRenderOperacional(container) {
+      const hoje = fnHojeLocal();
+      const dataHojeStr = fnFormatarDataBr(hoje);
+      const mesHojeRef = `${hoje.ano}/${String(hoje.mes).padStart(2, '0')}`;
+      const mesSelecionadoDiferente = (appState.filtroMesRef !== 'TODOS' && appState.filtroMesRef !== mesHojeRef);
+
+      // CASO 1: VISÃO ⚡ PARCIAL DO DIA
+      if (appState.visOperacional === 'parcial') {
+        const baseHoje = fnFiltrarBaseHoje();
+        const totalTentativasHoje = baseHoje.length;
+        const vendasHoje = baseHoje.filter(r => fnIsVenda(r.status_venda, r.regional)).length;
+        const aprovadosHoje = baseHoje.filter(r => fnNormalizarStatus(r.status_venda) === 'APPROVED').length;
+        const aguardandoHoje = baseHoje.filter(r => fnNormalizarStatus(r.status_venda) === 'AWAITING_PORTABILITY').length;
+
+        const franqComVendaSet = new Set();
+        baseHoje.forEach(r => {
+          if (fnIsVenda(r.status_venda, r.regional)) {
+            franqComVendaSet.add(r.franquia_nome);
+          }
+        });
+        const qtdFranquiasComVenda = franqComVendaSet.size;
+        const convHoje = totalTentativasHoje > 0 ? ((vendasHoje / totalTentativasHoje) * 100).toFixed(1) : '0.0';
+
+        // Agregação de Franquias do Dia
+        const franqHojeMap = {};
+        baseHoje.forEach(v => {
+          if (!REGIONAIS_VALIDAS.has(v.regional)) return;
+          const nome = v.franquia_nome;
+          if (!franqHojeMap[nome]) {
+            franqHojeMap[nome] = {
+              franquia: nome,
+              regional: v.regional,
+              uf: v.franquia_uf,
+              grupo: v.subregional_subregional || '-',
+              tentativas: 0,
+              aprovadas: 0,
+              aguardando: 0,
+              vendas: 0
+            };
+          }
+          franqHojeMap[nome].tentativas++;
+          const st = fnNormalizarStatus(v.status_venda);
+          if (st === 'APPROVED') franqHojeMap[nome].aprovadas++;
+          if (st === 'AWAITING_PORTABILITY') franqHojeMap[nome].aguardando++;
+          if (fnIsVenda(st, v.regional)) franqHojeMap[nome].vendas++;
+        });
+
+        const franqHojeList = Object.values(franqHojeMap);
+        franqHojeList.sort((a, b) => b.vendas !== a.vendas ? b.vendas - a.vendas : b.tentativas - a.tentativas);
+
+        container.innerHTML = `
+          <!-- Vision Selector Header -->
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:12px;">
+            <div style="display:inline-flex; background:#E2E8F0; padding:3px; border-radius:6px;">
+              <button id="btnVisConsolidado" class="btn-vis" type="button" style="border:none; padding:6px 14px; font-size:0.82rem; font-weight:600; cursor:pointer; border-radius:4px; background:transparent; color:#475569;">
+                📊 Consolidado
+              </button>
+              <button id="btnVisParcial" class="btn-vis active-vis" type="button" style="border:none; padding:6px 14px; font-size:0.82rem; font-weight:600; cursor:pointer; border-radius:4px; background:var(--tim-blue); color:#FFF;">
+                ⚡ Parcial do Dia
+              </button>
+            </div>
+            <span class="cluster-tag tag-ritmo" style="font-size:0.82rem; padding:5px 12px; font-weight:700;">
+              ⚡ EM ANDAMENTO — Parcial de hoje (${dataHojeStr})
+            </span>
+          </div>
+
+          ${mesSelecionadoDiferente ? `
+            <div class="notice-box notice-warning" style="margin-bottom:16px;">
+              ⚠️ O filtro global de mês está em <strong>${appState.filtroMesRef}</strong> — a visão parcial de hoje refere-se à data atual local: <strong>${dataHojeStr}</strong>.
+            </div>
+          ` : ''}
+
+          ${totalTentativasHoje === 0 ? `
+            <!-- Nota clara para ZERO legítimo de registros sem bug -->
+            <div class="notice-box" style="padding:18px; font-size:0.9rem; margin-bottom:20px; text-align:center;">
+              ℹ️ Nenhum registro para hoje (${dataHojeStr}) — o parcial será atualizado quando houver dados.
+            </div>
+          ` : `
+            ${vendasHoje === 0 ? `
+              <div class="notice-box notice-warning" style="margin-bottom:16px;">
+                ℹ️ Nenhuma venda aprovada confirmada hoje até o momento em <strong>${totalTentativasHoje}</strong> tentativas registradas.
+              </div>
+            ` : ''}
+
+            <!-- KPIs do Dia -->
+            <div class="grid-4" style="margin-bottom:20px;">
+              <div class="app-card" style="margin:0; border-top:4px solid var(--tim-blue);">
+                <div style="font-size:0.75rem; color:#64748B; font-weight:700;">VENDAS DE HOJE</div>
+                <div style="font-size:1.8rem; font-weight:800; color:var(--tim-blue); margin:4px 0;">${vendasHoje}</div>
+                <div style="font-size:0.75rem; color:#059669; font-weight:600;">Aprovadas + Portabilidade</div>
+              </div>
+              <div class="app-card" style="margin:0; border-top:4px solid #10B981;">
+                <div style="font-size:0.75rem; color:#64748B; font-weight:700;">APROVADAS / AGUARDANDO</div>
+                <div style="font-size:1.8rem; font-weight:800; color:#10B981; margin:4px 0;">${aprovadosHoje} <span style="font-size:1rem; color:#64748B; font-weight:600;">/ ${aguardandoHoje}</span></div>
+                <div style="font-size:0.75rem; color:#64748B;">Status estritos de venda</div>
+              </div>
+              <div class="app-card" style="margin:0; border-top:4px solid var(--tim-teal);">
+                <div style="font-size:0.75rem; color:#64748B; font-weight:700;">TENTATIVAS DO DIA</div>
+                <div style="font-size:1.8rem; font-weight:800; color:#0284C7; margin:4px 0;">${totalTentativasHoje}</div>
+                <div style="font-size:0.75rem; color:#64748B;">Conversão do dia: <strong>${convHoje}%</strong></div>
+              </div>
+              <div class="app-card" style="margin:0; border-top:4px solid var(--tim-orange);">
+                <div style="font-size:0.75rem; color:#64748B; font-weight:700;">FRANQUIAS COM VENDA</div>
+                <div style="font-size:1.8rem; font-weight:800; color:#C2410C; margin:4px 0;">${qtdFranquiasComVenda}</div>
+                <div style="font-size:0.75rem; color:#64748B;">Unidades ativas com conversão</div>
+              </div>
+            </div>
+
+            <!-- Tabela Franquias do Dia -->
+            <div class="app-card">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+                <div>
+                  <h3 class="app-card-title">⚡ Franquias do Dia — Movimentação de Hoje (${dataHojeStr})</h3>
+                  <p class="app-card-subtitle" style="margin:0;">Classificação das franquias com atividade registrada na data de hoje</p>
+                </div>
+                <span class="cluster-tag tag-alto" style="font-size:0.78rem;">${franqHojeList.length} franquias com movimentação</span>
+              </div>
+              <div class="table-container">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>RK</th>
+                      <th>Regional</th>
+                      <th>Franquia</th>
+                      <th>UF</th>
+                      <th>Grupo</th>
+                      <th class="num">Tentativas Hoje</th>
+                      <th class="num">Aprovadas</th>
+                      <th class="num">Agu. Portabilidade</th>
+                      <th class="num">Vendas Hoje</th>
+                      <th class="num">% Conversão</th>
+                      <th>Status Hoje</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${franqHojeList.map((f, i) => {
+                      const cHoje = f.tentativas > 0 ? ((f.vendas / f.tentativas) * 100).toFixed(1) : '0.0';
+                      return `
+                        <tr>
+                          <td style="font-weight:700;">#${i + 1}</td>
+                          <td style="font-weight:600;">${f.regional}</td>
+                          <td style="font-weight:700; color:var(--tim-blue);">${f.franquia}</td>
+                          <td>${f.uf}</td>
+                          <td>${f.grupo}</td>
+                          <td class="num">${f.tentativas}</td>
+                          <td class="num">${f.aprovadas}</td>
+                          <td class="num">${f.aguardando}</td>
+                          <td class="num" style="font-weight:800; color:${f.vendas > 0 ? '#059669' : '#C5221F'};">${f.vendas}</td>
+                          <td class="num">${cHoje}%</td>
+                          <td>
+                            <span class="cluster-tag ${f.vendas > 0 ? 'tag-alto' : 'tag-ritmo'}">
+                              ${f.vendas > 0 ? '🟢 Vendeu Hoje' : '🟡 Tentativas (' + f.tentativas + ')'}
+                            </span>
+                          </td>
+                        </tr>
+                      `;
+                    }).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `}
+        `;
+
+        // Listeners da visão parcial
+        document.getElementById('btnVisConsolidado').onclick = () => {
+          appState.visOperacional = 'consolidado';
+          fnRenderOperacional(container);
+        };
+        document.getElementById('btnVisParcial').onclick = () => {
+          appState.visOperacional = 'parcial';
+          fnRenderOperacional(container);
+        };
+        return;
+      }
+
+      // CASO 2: VISÃO 📊 CONSOLIDADO
       const base = fnFiltrarBase();
 
-      // Regional consolidated table (22 business days)
+      // Tabela Consolidada por Regional (22 dias úteis)
       const regioesList = ['EQUATORIAL', 'SAO PAULO MINAS', 'INTERIOR', 'COSTA LESTE', 'CENTRO SUL'];
       const regSummary = {};
       regioesList.forEach(r => {
@@ -2168,7 +2684,7 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         }
       });
 
-      // Franchise Aggregation (exclui regionais inválidas)
+      // Agregação por Franquia (exclui regionais inválidas)
       const franqMap = {};
       base.forEach(v => {
         if (!REGIONAIS_VALIDAS.has(v.regional)) return;
@@ -2192,14 +2708,15 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         if (st === 'AWAITING_PORTABILITY') franqMap[nome].aguardando++;
         if (fnIsVenda(st, v.regional)) {
           franqMap[nome].vendas++;
-          const dia = parseInt(v.data_abreviada ? v.data_abreviada.slice(-2) : '1', 10);
+          const dNorm = fnNormalizarData(v.data_abreviada || v.created_at);
+          const dia = dNorm ? dNorm.dia : 1;
           if (dia > franqMap[nome].ultimaVendaDia) franqMap[nome].ultimaVendaDia = dia;
         }
       });
 
       let franqList = Object.values(franqMap);
 
-      // Metas and Clusters calculation
+      // Metas e Clusters
       franqList.forEach(f => {
         const mObj = fnObterMetaFranquia(f.regional, f.grupo, f.franquia, appState.filtroMesRef);
         f.meta = mObj.meta;
@@ -2208,27 +2725,27 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         f.pctSuper = f.superMeta > 0 ? (f.vendas / f.superMeta) * 100 : 0;
         f.cluster = fnCalcularCluster(f.vendas, f.meta);
         f.conv = f.tentativas > 0 ? (f.vendas / f.tentativas) * 100 : 0;
-        f.diasSemVender = f.vendas > 0 ? Math.max(0, 24 - f.ultimaVendaDia) : 24;
+        f.diasSemVender = f.vendas > 0 ? Math.max(0, hoje.dia - f.ultimaVendaDia) : hoje.dia;
       });
 
-      // Cluster counter buttons
+      // Contadores de Clusters
       const countTodos = franqList.length;
       const countAlto = franqList.filter(f => f.cluster === 'ALTO').length;
       const countRitmo = franqList.filter(f => f.cluster === 'RITMO').length;
       const countBaixo = franqList.filter(f => f.cluster === 'BAIXO').length;
       const countZerada = franqList.filter(f => f.cluster === 'ZERADA').length;
 
-      // Filter by cluster
+      // Filtro de cluster
       if (appState.clusterFiltro !== 'TODOS') {
         franqList = franqList.filter(f => f.cluster === appState.clusterFiltro);
       }
 
-      // Sort
+      // Ordenação
       franqList.sort((a, b) => {
         let vA = a[appState.sortCol] || 0;
         let vB = b[appState.sortCol] || 0;
         if (typeof vA === 'string') {
-          return appState.sortAsc ? vA.localeCompare(vB) : vB.localeCompare(vA);
+          return appState.sortAsc ? vA.localeCompare(vB) : vB.localeCompare(a);
         }
         return appState.sortAsc ? vA - vB : vB - vA;
       });
@@ -2237,14 +2754,16 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         <!-- Vision Selector -->
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:12px;">
           <div style="display:inline-flex; background:#E2E8F0; padding:3px; border-radius:6px;">
-            <button id="btnVisConsolidado" class="btn-vis ${appState.visOperacional === 'consolidado' ? 'active-vis' : ''}" type="button" style="border:none; padding:6px 14px; font-size:0.82rem; font-weight:600; cursor:pointer; border-radius:4px; ${appState.visOperacional === 'consolidado' ? 'background:var(--tim-blue); color:#FFF;' : 'background:transparent; color:#475569;'}">
+            <button id="btnVisConsolidado" class="btn-vis active-vis" type="button" style="border:none; padding:6px 14px; font-size:0.82rem; font-weight:600; cursor:pointer; border-radius:4px; background:var(--tim-blue); color:#FFF;">
               📊 Consolidado
             </button>
-            <button id="btnVisParcial" class="btn-vis ${appState.visOperacional === 'parcial' ? 'active-vis' : ''}" type="button" style="border:none; padding:6px 14px; font-size:0.82rem; font-weight:600; cursor:pointer; border-radius:4px; ${appState.visOperacional === 'parcial' ? 'background:var(--tim-blue); color:#FFF;' : 'background:transparent; color:#475569;'}">
+            <button id="btnVisParcial" class="btn-vis" type="button" style="border:none; padding:6px 14px; font-size:0.82rem; font-weight:600; cursor:pointer; border-radius:4px; background:transparent; color:#475569;">
               ⚡ Parcial do Dia
             </button>
           </div>
-          ${appState.visOperacional === 'parcial' ? '<span class="cluster-tag tag-ritmo" style="font-size:0.8rem;">⚡ Em andamento — filtrado pelo dia atual</span>' : ''}
+          <span style="font-size:0.82rem; color:#64748B; font-weight:600;">
+            📅 Dados consolidados do período selecionado (${appState.filtroMesRef})
+          </span>
         </div>
 
         <!-- Regional Table -->
@@ -3218,12 +3737,7 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
       const mesPrincipal = mesesValidos[0] || Array.from(detectadosMeses)[0] || '2025/03';
       appState.filtroMesRef = mesPrincipal;
 
-      // Persistência e atualização de todas as visões
-      fnSalvarNoSupabase();
-      fnPopularFiltros();
-      fnRenderizarAbaAtiva();
-
-      // Passo 4: Concluído
+      // Passo 4: Concluído — exibição imediata das mensagens na tela
       const step2 = document.getElementById('stepMappingSection');
       const step4 = document.getElementById('stepResultSection');
       const titleLbl = document.getElementById('resultTitle');
@@ -3249,6 +3763,17 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         Mês de Referência ativo no filtro: <strong>${mesPrincipal}</strong> · Todas as metas e cálculos foram sincronizados.
         ${avisosHtml}
       `;
+
+      // Atualização imediata dos filtros e telas
+      fnPopularFiltros();
+      fnRenderizarAbaAtiva();
+
+      // Sincronização com Supabase usando payload limpo e recuperação automática sem travar importação
+      try {
+        fnSalvarNoSupabase();
+      } catch (errSync) {
+        console.warn('Sincronização em segundo plano continuou no cache local:', errSync);
+      }
     }
 
     // Franchise Metas Import / Paste Handler
