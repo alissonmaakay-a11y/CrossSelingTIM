@@ -1078,7 +1078,62 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
     // Pending file upload buffer
     let pendingParsedRows = [];
 
-    // Helper: LocalStorage safe save
+    // CORREÇÃO 2: Parse defensivo universal para jsonb e localStorage
+    function fnParseConteudo(valor) {
+      if (valor === undefined || valor === null) return null;
+      if (typeof valor === 'object') return valor;
+      if (typeof valor === 'string') {
+        const str = valor.trim();
+        if (!str) return null;
+        try {
+          return JSON.parse(str);
+        } catch (e) {
+          return str;
+        }
+      }
+      return valor;
+    }
+
+    function fnFormatarDataHoraBr(valor) {
+      let d = valor ? new Date(valor) : new Date();
+      if (isNaN(d.getTime())) d = new Date();
+      const dia = String(d.getDate()).padStart(2, '0');
+      const mes = String(d.getMonth() + 1).padStart(2, '0');
+      const ano = d.getFullYear();
+      const h = String(d.getHours()).padStart(2, '0');
+      const min = String(d.getMinutes()).padStart(2, '0');
+      return `${dia}/${mes}/${ano} ${h}:${min}`;
+    }
+
+    // Indicador visual de sincronização no cabeçalho
+    function fnAtualizarIndicadorSync(status, dataIso) {
+      const syncText = document.getElementById('syncText');
+      const syncDot = document.querySelector('.sync-dot');
+      const syncIndicator = document.getElementById('syncIndicator');
+      if (!syncText || !syncDot) return;
+
+      const dataFmt = fnFormatarDataHoraBr(dataIso);
+
+      if (status === 'syncing') {
+        syncText.textContent = 'Sincronizando…';
+        syncDot.style.backgroundColor = '#F59E0B';
+        if (syncIndicator) syncIndicator.title = 'Buscando versão atualizada no Supabase...';
+      } else if (status === 'supabase') {
+        syncText.textContent = `Salvo no Supabase • ${dataFmt}`;
+        syncDot.style.backgroundColor = '#10B981';
+        if (syncIndicator) syncIndicator.title = `🔄 Atualizado ${dataFmt} (nuvem Supabase)`;
+      } else if (status === 'cache') {
+        syncText.textContent = `Offline — dados locais de ${dataFmt}`;
+        syncDot.style.backgroundColor = '#F59E0B';
+        if (syncIndicator) syncIndicator.title = `Modo offline: exibindo dados do cache local (${dataFmt})`;
+      } else {
+        syncText.textContent = 'Offline — cache local';
+        syncDot.style.backgroundColor = '#F59E0B';
+        if (syncIndicator) syncIndicator.title = 'Supabase não respondeu. Exibindo dados locais.';
+      }
+    }
+
+    // Helper: LocalStorage safe save com espelho e controle de cota
     function fnSalvarCache(chave, valor) {
       try {
         const str = JSON.stringify(valor);
@@ -1087,6 +1142,7 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
           return false;
         }
         localStorage.setItem(chave, str);
+        localStorage.setItem(`${chave}_atualizado_em`, new Date().toISOString());
         return true;
       } catch (e) {
         console.warn('Erro ao salvar no localStorage:', e);
@@ -1097,7 +1153,7 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
     function fnCarregarCache(chave) {
       try {
         const data = localStorage.getItem(chave);
-        return data ? JSON.parse(data) : null;
+        return fnParseConteudo(data);
       } catch (e) {
         return null;
       }
@@ -1197,48 +1253,48 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
       };
     }
 
-    // Helper: conversão segura do jsonb para objeto
-    function fnParseConteudoSupabase(conteudo) {
-      if (conteudo === undefined || conteudo === null) return null;
-      if (typeof conteudo === 'object') return conteudo;
-      if (typeof conteudo === 'string') {
-        try {
-          return JSON.parse(conteudo);
-        } catch (e) {
-          console.warn('Erro ao converter jsonb string:', e);
-          return null;
-        }
-      }
-      return null;
-    }
-
-    // 1. fnSyncLerChaves(chaves[]): GET .../dados?select=chave,conteudo com apikey + Authorization
-    async function fnSyncLerChaves(chaves = []) {
+    // 1. fnSyncLerChaves(chaves[]): GET com timeout configurável (8s padrão) e parse defensivo
+    async function fnSyncLerChaves(chaves = [], timeoutMs = 8000) {
       const mapa = {};
-      let url = `${SUPABASE_CONFIG.url}/rest/v1/dados?select=chave,conteudo`;
+      let url = `${SUPABASE_CONFIG.url}/rest/v1/dados?select=chave,conteudo,atualizado_em`;
       if (Array.isArray(chaves) && chaves.length > 0) {
         const chavesParam = chaves.map(c => `"${encodeURIComponent(String(c).trim())}"`).join(',');
         url += `&chave=in.(${chavesParam})`;
       }
 
-      const res = await fetch(url, {
-        method: 'GET',
-        headers: fnSyncGetHeaders()
-      });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-      if (!res.ok) {
-        const errTxt = await res.text().catch(() => '');
-        throw new Error(`HTTP ${res.status}: ${errTxt || res.statusText}`);
-      }
-
-      const lista = await res.json();
-      if (Array.isArray(lista)) {
-        lista.forEach(item => {
-          if (item && item.chave) {
-            mapa[item.chave] = fnParseConteudoSupabase(item.conteudo);
-          }
+      try {
+        const res = await fetch(url, {
+          method: 'GET',
+          headers: fnSyncGetHeaders(),
+          signal: controller.signal
         });
+
+        clearTimeout(timer);
+
+        if (!res.ok) {
+          const errTxt = await res.text().catch(() => '');
+          throw new Error(`HTTP ${res.status}: ${errTxt || res.statusText}`);
+        }
+
+        const lista = await res.json();
+        if (Array.isArray(lista)) {
+          lista.forEach(item => {
+            if (item && item.chave) {
+              mapa[item.chave] = {
+                conteudo: fnParseConteudo(item.conteudo),
+                atualizado_em: item.atualizado_em || null
+              };
+            }
+          });
+        }
+      } catch (err) {
+        clearTimeout(timer);
+        throw err;
       }
+
       return mapa;
     }
 
@@ -1438,104 +1494,175 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         console.warn('Erro ao atualizar cache local:', eCache);
       }
 
+      const agoraIso = new Date().toISOString();
       if (todasOk) {
-        if (syncText) syncText.textContent = 'Salvo no Supabase';
-        if (syncDot) syncDot.style.backgroundColor = '#10B981';
+        fnAtualizarIndicadorSync('supabase', agoraIso);
       } else if (houveFalhaRede) {
-        if (syncText) syncText.textContent = 'Supabase indisponível';
-        if (syncDot) syncDot.style.backgroundColor = '#64748B';
+        fnAtualizarIndicadorSync('cache', agoraIso);
       } else if (houveErroPermissao) {
         if (syncText) syncText.textContent = 'RLS / Sem permissão';
         if (syncDot) syncDot.style.backgroundColor = '#EF4444';
       } else {
-        if (syncText) syncText.textContent = 'Cache local ativo';
-        if (syncDot) syncDot.style.backgroundColor = '#F59E0B';
+        fnAtualizarIndicadorSync('cache', agoraIso);
       }
     }
 
-    // Leitura preferindo Supabase usando fnSyncLerChaves
-    async function fnRecarregarDoSupabase() {
+    // CORREÇÃO 1, 3 & 4: Inicialização única que espera o Supabase, prioriza a nuvem e só depois renderiza
+    async function fnIniciarDados(origemManual = false) {
       const logBox = document.getElementById('syncLog');
-      const syncText = document.getElementById('syncText');
-      const syncDot = document.querySelector('.sync-dot');
+      fnAtualizarIndicadorSync('syncing');
 
-      if (logBox) logBox.innerHTML += '<br>[INFO] Consultando Supabase via fnSyncLerChaves...';
+      if (logBox) logBox.innerHTML += `<br>[INFO] ${origemManual ? 'Recarregando' : 'Carregando'} dados prioritários da nuvem Supabase...`;
+
+      let dadosNuvemCarregados = false;
+      let dataHoraNuvem = null;
+
       try {
-        const mapa = await fnSyncLerChaves();
-        let dadosEncontrados = false;
+        const chavesParaBuscar = [
+          'cross_selling_master_data',
+          'base_vendas',
+          'metas_regionais',
+          'metas_grupos',
+          'metas_franquias'
+        ];
 
-        if (mapa && Object.keys(mapa).length > 0) {
-          Object.keys(mapa).forEach(k => {
-            const chave = k.toLowerCase().trim();
-            const conteudo = mapa[k];
-            if (!conteudo) return;
+        const mapa = await fnSyncLerChaves(chavesParaBuscar, 8000);
 
-            if (chave === 'cross_selling_master_data') {
-              if (conteudo.metasRegionais) storeMetasRegionais = conteudo.metasRegionais;
-              if (conteudo.metasGrupos) storeMetasGrupos = conteudo.metasGrupos;
-              if (conteudo.metasFranquias) storeMetasFranquias = conteudo.metasFranquias;
-              if (Array.isArray(conteudo.vendasSample) && conteudo.vendasSample.length > 0) {
-                storeVendas = conteudo.vendasSample;
-              } else if (Array.isArray(conteudo.vendas) && conteudo.vendas.length > 0) {
-                storeVendas = conteudo.vendas;
+        if (mapa && typeof mapa === 'object' && Object.keys(mapa).length > 0) {
+          // 1. base_vendas
+          const bv = mapa['base_vendas']?.conteudo;
+          if (bv) {
+            if (Array.isArray(bv) && bv.length > 0) {
+              storeVendas = bv;
+              dadosNuvemCarregados = true;
+            } else if (Array.isArray(bv.vendas) && bv.vendas.length > 0) {
+              storeVendas = bv.vendas;
+              dadosNuvemCarregados = true;
+            }
+          }
+
+          // 2. metas_regionais
+          const mr = mapa['metas_regionais']?.conteudo;
+          if (mr && typeof mr === 'object' && Object.keys(mr).length > 0) {
+            storeMetasRegionais = mr;
+            dadosNuvemCarregados = true;
+          }
+
+          // 3. metas_grupos
+          const mg = mapa['metas_grupos']?.conteudo;
+          if (mg && typeof mg === 'object' && Object.keys(mg).length > 0) {
+            storeMetasGrupos = mg;
+            dadosNuvemCarregados = true;
+          }
+
+          // 4. metas_franquias
+          const mf = mapa['metas_franquias']?.conteudo;
+          if (mf && typeof mf === 'object' && Object.keys(mf).length > 0) {
+            storeMetasFranquias = mf;
+            dadosNuvemCarregados = true;
+          }
+
+          // 5. cross_selling_master_data (suporte complementar)
+          const md = mapa['cross_selling_master_data']?.conteudo;
+          if (md && typeof md === 'object') {
+            dadosNuvemCarregados = true;
+            if ((!storeVendas || storeVendas.length === 0)) {
+              if (Array.isArray(md.vendasSample) && md.vendasSample.length > 0) {
+                storeVendas = md.vendasSample;
+              } else if (Array.isArray(md.vendas) && md.vendas.length > 0) {
+                storeVendas = md.vendas;
               }
-              dadosEncontrados = true;
-            } else if (chave === 'meta_regionais' || chave === 'metas_regionais') {
-              storeMetasRegionais = conteudo;
-              dadosEncontrados = true;
-            } else if (chave === 'metas_grupos' || chave === 'meta_grupos') {
-              storeMetasGrupos = conteudo;
-              dadosEncontrados = true;
-            } else if (chave === 'metas_franquias' || chave === 'meta_franquias') {
-              storeMetasFranquias = conteudo;
-              dadosEncontrados = true;
-            } else if (chave === 'base_vendas' || chave === 'base_de_vendas' || chave === 'vendas') {
-              if (Array.isArray(conteudo) && conteudo.length > 0) {
-                storeVendas = conteudo;
-                dadosEncontrados = true;
-              } else if (Array.isArray(conteudo.vendas) && conteudo.vendas.length > 0) {
-                storeVendas = conteudo.vendas;
-                dadosEncontrados = true;
+            }
+            if (md.metasRegionais && (!mapa['metas_regionais'] || !mapa['metas_regionais'].conteudo)) {
+              storeMetasRegionais = md.metasRegionais;
+            }
+            if (md.metasGrupos && (!mapa['metas_grupos'] || !mapa['metas_grupos'].conteudo)) {
+              storeMetasGrupos = md.metasGrupos;
+            }
+            if (md.metasFranquias && (!mapa['metas_franquias'] || !mapa['metas_franquias'].conteudo)) {
+              storeMetasFranquias = md.metasFranquias;
+            }
+          }
+
+          // Capturar a data/hora mais recente de atualizado_em retornada
+          Object.values(mapa).forEach(v => {
+            if (v && v.atualizado_em) {
+              if (!dataHoraNuvem || new Date(v.atualizado_em) > new Date(dataHoraNuvem)) {
+                dataHoraNuvem = v.atualizado_em;
               }
             }
           });
         }
 
-        if (dadosEncontrados) {
-          if (logBox) logBox.innerHTML += '<br><span style="color:#34D399;">[OK] Dados carregados do Supabase com sucesso!</span>';
-          if (syncText) syncText.textContent = 'Salvo no Supabase';
-          if (syncDot) syncDot.style.backgroundColor = '#10B981';
+        if (dadosNuvemCarregados) {
+          // Espelha no cache local como backup, sem sobrescrever nuvem
+          try {
+            fnSalvarCache('cache_metas_regionais', storeMetasRegionais);
+            fnSalvarCache('cache_metas_grupos', storeMetasGrupos);
+            fnSalvarCache('cache_metas_franquias', storeMetasFranquias);
+            fnSalvarCache('cache_vendas_data', storeVendas);
+          } catch (eEspelho) {
+            console.warn('Aviso ao espelhar nuvem no cache local:', eEspelho);
+          }
+
+          const stampFinal = dataHoraNuvem || new Date().toISOString();
+          fnAtualizarIndicadorSync('supabase', stampFinal);
+          if (logBox) logBox.innerHTML += `<br><span style="color:#34D399;">[OK] Dados do Supabase aplicados com sucesso! Sincronização: ${fnFormatarDataHoraBr(stampFinal)}</span>`;
+
           fnPreencherCamposAdmin();
           fnPopularFiltros();
           fnRenderizarAbaAtiva();
           return;
         }
-      } catch (e) {
-        if (logBox) logBox.innerHTML += `<br>[AVISO] Supabase indisponível. Usando cache local: ${e.message}`;
-        if (syncText) syncText.textContent = 'Supabase indisponível';
-        if (syncDot) syncDot.style.backgroundColor = '#64748B';
+      } catch (errNuvem) {
+        if (logBox) logBox.innerHTML += `<br><span style="color:#FBBF24;">[AVISO] Usando cache local: ${errNuvem.message || 'Falha na comunicação com o Supabase'}</span>`;
       }
 
-      // Fallback seguro em cache local
+      // SOMENTE SE O SUPABASE FALHAR OU RETORNAR ZERO DADOS: FALLBACK PARA LOCALSTORAGE
+      let dadosCacheRecuperados = false;
+      let timestampCache = null;
       try {
         const cReg = fnCarregarCache('cache_metas_regionais');
         const cGrp = fnCarregarCache('cache_metas_grupos');
         const cFrq = fnCarregarCache('cache_metas_franquias');
         const cVen = fnCarregarCache('cache_vendas_data');
+        timestampCache = localStorage.getItem('cache_vendas_data_atualizado_em') || localStorage.getItem('cache_metas_regionais_atualizado_em');
 
-        if (cReg) storeMetasRegionais = cReg;
-        if (cGrp) storeMetasGrupos = cGrp;
-        if (cFrq) storeMetasFranquias = cFrq;
-        if (cVen && cVen.length > 0) storeVendas = cVen;
-        else if (!storeVendas || storeVendas.length === 0) storeVendas = fnGerarMockPadrao();
+        if (cReg && typeof cReg === 'object' && Object.keys(cReg).length > 0) {
+          storeMetasRegionais = cReg;
+          dadosCacheRecuperados = true;
+        }
+        if (cGrp && typeof cGrp === 'object' && Object.keys(cGrp).length > 0) {
+          storeMetasGrupos = cGrp;
+          dadosCacheRecuperados = true;
+        }
+        if (cFrq && typeof cFrq === 'object' && Object.keys(cFrq).length > 0) {
+          storeMetasFranquias = cFrq;
+          dadosCacheRecuperados = true;
+        }
+        if (Array.isArray(cVen) && cVen.length > 0) {
+          storeVendas = cVen;
+          dadosCacheRecuperados = true;
+        }
       } catch (eCacheFallback) {
-        console.warn('Erro ao ler cache local de fallback:', eCacheFallback);
-        if (!storeVendas || storeVendas.length === 0) storeVendas = fnGerarMockPadrao();
+        console.warn('Erro ao carregar cache local:', eCacheFallback);
       }
 
+      // Se nem nuvem nem cache tiverem vendas, usar mock padrão inicial
+      if (!dadosCacheRecuperados && (!storeVendas || storeVendas.length === 0)) {
+        storeVendas = fnGerarMockPadrao();
+      }
+
+      fnAtualizarIndicadorSync('cache', timestampCache || new Date().toISOString());
+
+      // Renderização obrigatória de todas as visões após definir o estado final
       fnPreencherCamposAdmin();
       fnPopularFiltros();
       fnRenderizarAbaAtiva();
+    }
+
+    function fnRecarregarDoSupabase() {
+      return fnIniciarDados(true);
     }
 
     // Authentication
@@ -3830,9 +3957,11 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
 
     // Global Event Setup
     document.addEventListener('DOMContentLoaded', () => {
-      // 1. Initial Data Load
-      storeVendas = fnGerarMockPadrao();
-      fnRecarregarDoSupabase();
+      // Estado inicial em memória preparado como fallback até a nuvem responder
+      storeVendas = [];
+
+      // 1. Inicialização assíncrona mandatória: espera o Supabase, prioriza a nuvem e re-renderiza
+      fnIniciarDados();
 
       // 2. Tab Navigation
       document.querySelectorAll('.nav-tab-btn').forEach(btn => {
@@ -3968,10 +4097,6 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         const mAcao = document.getElementById('modalAcaoFranquia');
         if (e.target === mAcao) mAcao.style.display = 'none';
       });
-
-      // Initial Render
-      fnPopularFiltros();
-      fnRenderizarAbaAtiva();
     });
   </script>
 <script>
