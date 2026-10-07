@@ -598,7 +598,7 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
   <!-- Cascading Filter Bar -->
   <div class="filter-bar-container">
     <div class="filter-grid">
-      <div class="filter-item" style="max-width: 140px;">
+      <div class="filter-item" style="max-width: 150px;">
         <label for="filtroMesRef">Mês Ref.</label>
         <select id="filtroMesRef"></select>
       </div>
@@ -639,6 +639,11 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         </button>
       </div>
     </div>
+  </div>
+
+  <!-- Banner de Aviso de Dados Mock / Demonstração -->
+  <div id="bannerAvisoMock" style="display: none; background: #FFFBEB; border-bottom: 1px solid #FCD34D; color: #92400E; padding: 10px 20px; font-size: 0.84rem; text-align: center; font-weight: 500;">
+    ℹ️ Exibindo dados de demonstração — importe a base de vendas no Admin para carregar os dados reais.
   </div>
 
   <!-- Navigation Tabs -->
@@ -1072,8 +1077,16 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
     // Individual franchise metas dictionary key: MesRef__Regional__Franquia
     let storeMetasFranquias = {};
 
-    // In-memory Sales Database
+    // In-memory Sales Database (Fonte Única de Verdade)
     let storeVendas = [];
+    let isUsandoMock = false;
+
+    function fnAtualizarBannerMock() {
+      const banner = document.getElementById('bannerAvisoMock');
+      if (banner) {
+        banner.style.display = isUsandoMock ? 'block' : 'none';
+      }
+    }
 
     // Pending file upload buffer
     let pendingParsedRows = [];
@@ -1424,13 +1437,14 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         metasGrupos: storeMetasGrupos,
         metasFranquias: storeMetasFranquias,
         vendasCount: storeVendas.length,
-        vendasSample: storeVendas.slice(0, 1500),
+        isReal: !isUsandoMock,
         atualizado_em: new Date().toISOString()
       };
 
       const payloadBaseVendas = {
         total: storeVendas.length,
-        vendas: storeVendas.slice(0, 2000),
+        vendas: storeVendas,
+        isReal: !isUsandoMock,
         atualizado_em: new Date().toISOString()
       };
 
@@ -1490,6 +1504,7 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         fnSalvarCache('cache_metas_grupos', storeMetasGrupos);
         fnSalvarCache('cache_metas_franquias', storeMetasFranquias);
         fnSalvarCache('cache_vendas_data', storeVendas);
+        localStorage.setItem('base_vendas_is_real', isUsandoMock ? 'false' : 'true');
       } catch (eCache) {
         console.warn('Erro ao atualizar cache local:', eCache);
       }
@@ -1529,15 +1544,17 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         const mapa = await fnSyncLerChaves(chavesParaBuscar, 8000);
 
         if (mapa && typeof mapa === 'object' && Object.keys(mapa).length > 0) {
-          // 1. base_vendas
+          // 1. base_vendas (Prioridade Máxima da base real)
           const bv = mapa['base_vendas']?.conteudo;
           if (bv) {
             if (Array.isArray(bv) && bv.length > 0) {
               storeVendas = bv;
               dadosNuvemCarregados = true;
+              isUsandoMock = false;
             } else if (Array.isArray(bv.vendas) && bv.vendas.length > 0) {
               storeVendas = bv.vendas;
               dadosNuvemCarregados = true;
+              isUsandoMock = (bv.isReal === false);
             }
           }
 
@@ -1566,11 +1583,13 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
           const md = mapa['cross_selling_master_data']?.conteudo;
           if (md && typeof md === 'object') {
             dadosNuvemCarregados = true;
-            if ((!storeVendas || storeVendas.length === 0)) {
-              if (Array.isArray(md.vendasSample) && md.vendasSample.length > 0) {
-                storeVendas = md.vendasSample;
-              } else if (Array.isArray(md.vendas) && md.vendas.length > 0) {
+            if (!storeVendas || storeVendas.length === 0) {
+              if (Array.isArray(md.vendas) && md.vendas.length > 0) {
                 storeVendas = md.vendas;
+                isUsandoMock = (md.isReal === false);
+              } else if (Array.isArray(md.vendasSample) && md.vendasSample.length > 0) {
+                storeVendas = md.vendasSample;
+                isUsandoMock = (md.isReal === false);
               }
             }
             if (md.metasRegionais && (!mapa['metas_regionais'] || !mapa['metas_regionais'].conteudo)) {
@@ -1594,13 +1613,14 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
           });
         }
 
-        if (dadosNuvemCarregados) {
+        if (dadosNuvemCarregados && storeVendas && storeVendas.length > 0) {
           // Espelha no cache local como backup, sem sobrescrever nuvem
           try {
             fnSalvarCache('cache_metas_regionais', storeMetasRegionais);
             fnSalvarCache('cache_metas_grupos', storeMetasGrupos);
             fnSalvarCache('cache_metas_franquias', storeMetasFranquias);
             fnSalvarCache('cache_vendas_data', storeVendas);
+            localStorage.setItem('base_vendas_is_real', isUsandoMock ? 'false' : 'true');
           } catch (eEspelho) {
             console.warn('Aviso ao espelhar nuvem no cache local:', eEspelho);
           }
@@ -1609,6 +1629,7 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
           fnAtualizarIndicadorSync('supabase', stampFinal);
           if (logBox) logBox.innerHTML += `<br><span style="color:#34D399;">[OK] Dados do Supabase aplicados com sucesso! Sincronização: ${fnFormatarDataHoraBr(stampFinal)}</span>`;
 
+          fnAtualizarBannerMock();
           fnPreencherCamposAdmin();
           fnPopularFiltros();
           fnRenderizarAbaAtiva();
@@ -1643,16 +1664,19 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         if (Array.isArray(cVen) && cVen.length > 0) {
           storeVendas = cVen;
           dadosCacheRecuperados = true;
+          isUsandoMock = (localStorage.getItem('base_vendas_is_real') === 'false');
         }
       } catch (eCacheFallback) {
         console.warn('Erro ao carregar cache local:', eCacheFallback);
       }
 
-      // Se nem nuvem nem cache tiverem vendas, usar mock padrão inicial
+      // Se nem nuvem nem cache tiverem vendas reais, usar mock padrão apenas como último recurso
       if (!dadosCacheRecuperados && (!storeVendas || storeVendas.length === 0)) {
         storeVendas = fnGerarMockPadrao();
+        isUsandoMock = true;
       }
 
+      fnAtualizarBannerMock();
       fnAtualizarIndicadorSync('cache', timestampCache || new Date().toISOString());
 
       // Renderização obrigatória de todas as visões após definir o estado final
@@ -1889,14 +1913,28 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
       return 'BAIXO';
     }
 
-    // Dynamic Filter Population
+    // Dynamic Filter Population (Derivado 100% da base em memória atual)
     function fnPopularFiltros() {
-      // Meses
+      // Meses únicos presentes na base atual
       const selectMes = document.getElementById('filtroMesRef');
       const mesesSet = new Set();
-      storeVendas.forEach(v => { if (v.mes_ref) mesesSet.add(v.mes_ref); });
-      const meses = Array.from(mesesSet).sort().reverse();
-      if (meses.length === 0) meses.push('2025/03');
+      storeVendas.forEach(v => {
+        if (v.mes_ref && v.mes_ref !== 'SEM DATA') mesesSet.add(v.mes_ref);
+      });
+      const mesesValidos = Array.from(mesesSet).sort().reverse();
+      const meses = [...mesesValidos];
+      if (storeVendas.some(v => v.mes_ref === 'SEM DATA')) {
+        meses.push('SEM DATA');
+      }
+
+      if (meses.length === 0) {
+        meses.push(_mesInicialRef);
+      }
+
+      // O mês padrão selecionado DEVE ser o mês MAIS RECENTE da base importada
+      if (appState.filtroMesRef !== 'TODOS' && !meses.includes(appState.filtroMesRef)) {
+        appState.filtroMesRef = mesesValidos.length > 0 ? mesesValidos[0] : meses[0];
+      }
 
       selectMes.innerHTML = '<option value="TODOS">Todos os Meses</option>';
       meses.forEach(m => {
@@ -1906,10 +1944,7 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         if (m === appState.filtroMesRef) opt.selected = true;
         selectMes.appendChild(opt);
       });
-      if (!appState.filtroMesRef && meses.length > 0) {
-        appState.filtroMesRef = meses[0];
-        selectMes.value = meses[0];
-      }
+      selectMes.value = appState.filtroMesRef;
 
       // Regional
       const selectReg = document.getElementById('filtroRegional');
@@ -3242,9 +3277,29 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
     // VIEW 4: PROJEÇÕES DE FECHAMENTO DO MÊS
     function fnRenderProjecoes(container) {
       const base = fnFiltrarBase();
-      const diasDecorridos = 24;
-      const diasRestantes = 7;
-      const totalDiasMes = 31;
+
+      let anoRef = 2026;
+      let mesRefNum = 10;
+      let mesRefStr = appState.filtroMesRef || '';
+
+      if (mesRefStr !== 'TODOS' && mesRefStr.includes('/')) {
+        const parts = mesRefStr.split('/');
+        anoRef = parseInt(parts[0], 10) || 2026;
+        mesRefNum = parseInt(parts[1], 10) || 10;
+      } else {
+        const mesesEncontrados = Array.from(new Set(storeVendas.map(v => v.mes_ref).filter(m => m && m.includes('/')))).sort();
+        if (mesesEncontrados.length > 0) {
+          const ultimoMes = mesesEncontrados[mesesEncontrados.length - 1];
+          const p = ultimoMes.split('/');
+          anoRef = parseInt(p[0], 10) || 2026;
+          mesRefNum = parseInt(p[1], 10) || 10;
+        }
+      }
+
+      const totalDiasMes = new Date(anoRef, mesRefNum, 0).getDate();
+      const recorteInfo = fnCalcularRecorteDados(base, anoRef, mesRefNum, totalDiasMes);
+      const diasDecorridos = recorteInfo.maxDia > 0 ? recorteInfo.maxDia : 1;
+      const diasRestantes = Math.max(0, totalDiasMes - diasDecorridos);
 
       // Group scenarios generator
       function calcularCenario(vReal, meta, superMeta) {
@@ -3664,6 +3719,17 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         }
       }
 
+      // d.2) Formato "MM/AA" (ex.: "08/26", "09/26", "10/26")
+      const mmYyMatch = str.match(/^(\d{1,2})[\/\-\.](\d{2})$/);
+      if (mmYyMatch) {
+        const mes = parseInt(mmYyMatch[1], 10);
+        const yy = parseInt(mmYyMatch[2], 10);
+        const ano = 2000 + yy;
+        if (mes >= 1 && mes <= 12) {
+          return `${ano}/${String(mes).padStart(2, '0')}`;
+        }
+      }
+
       // e) Mês por extenso (ex.: "setembro 2026", "SET/2026", "set/2026", "set-2026")
       const mesesNomes = {
         'jan': '01', 'janeiro': '01',
@@ -3758,8 +3824,8 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
           const colGrupo = fnDetectarColuna(cols, ['subregional_subregional', 'grupo', 'subregional', 'sub_regional'], cols[0]);
           const colMotivo = fnDetectarColuna(cols, ['motivo_pendencia', 'motivo', 'pendencia', 'detalhe_pendencia'], cols[0]);
           
-          // Coluna de Mês Ref com padrão created_at
-          const colMesRef = fnDetectarColuna(cols, ['created_at', 'mes_ref', 'mes', 'data', 'data_abreviada'], colCreatedAt);
+          // Coluna de Mês Ref priorizando mes_ref / mes / competencia antes de created_at
+          const colMesRef = fnDetectarColuna(cols, ['mes_ref', 'mes', 'referencia', 'mes_referencia', 'competencia', 'created_at', 'data', 'data_abreviada'], colCreatedAt);
 
           // Preenchimento dos dropdowns
           fnPopularDropdownMapeamento(document.getElementById('mapColRegional'), cols, colRegional);
@@ -3821,8 +3887,13 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
 
       pendingParsedRows.forEach(row => {
         const valDataCriacao = row[colCreatedAt] || '';
-        const rawMesRefVal = row[colMesRef] || valDataCriacao;
-        const mesRef = parseMesRef(rawMesRefVal);
+        const rawMesRefVal = (row[colMesRef] !== undefined && row[colMesRef] !== null && String(row[colMesRef]).trim() !== '')
+          ? row[colMesRef]
+          : valDataCriacao;
+        let mesRef = parseMesRef(rawMesRefVal);
+        if (mesRef === 'SEM DATA' && valDataCriacao) {
+          mesRef = parseMesRef(valDataCriacao);
+        }
         detectadosMeses.add(mesRef);
 
         const rawReg = row[colRegional];
@@ -3859,10 +3930,15 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
         });
       });
 
+      // CORREÇÃO 1 & 2: Substituição total em memória pelo array importado (nunca mesclar com mock)
       storeVendas = novasList;
-      const mesesValidos = Array.from(detectadosMeses).filter(m => m !== 'SEM DATA');
-      const mesPrincipal = mesesValidos[0] || Array.from(detectadosMeses)[0] || '2025/03';
-      appState.filtroMesRef = mesPrincipal;
+      isUsandoMock = false;
+      localStorage.setItem('base_vendas_is_real', 'true');
+
+      // CORREÇÃO 3: Mês padrão DEVE ser o mês MAIS RECENTE da base importada (ex: 2026/10, não 2026/08)
+      const mesesValidos = Array.from(detectadosMeses).filter(m => m && m !== 'SEM DATA').sort().reverse();
+      const mesMaisRecente = mesesValidos.length > 0 ? mesesValidos[0] : (Array.from(detectadosMeses)[0] || 'TODOS');
+      appState.filtroMesRef = mesMaisRecente;
 
       // Passo 4: Concluído — exibição imediata das mensagens na tela
       const step2 = document.getElementById('stepMappingSection');
@@ -3875,7 +3951,7 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
 
       // Contagem com whitelist estrita de vendas e regional válida
       const totalVendasValidas = novasList.filter(r => fnIsVenda(r.status_venda, r.regional)).length;
-      titleLbl.textContent = `✅ Base importada com sucesso — ${novasList.length} registros importados · Mês ref. ${mesPrincipal}`;
+      titleLbl.textContent = `✅ Base importada com sucesso — ${novasList.length} registros importados`;
 
       let avisosHtml = '';
       if (linhasSemStatus > 0) {
@@ -3887,15 +3963,17 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
 
       detailsLbl.innerHTML = `
         <strong>${totalVendasValidas}</strong> vendas reais consolidadas (Aprovadas + Aguardando Portabilidade)<br>
-        Mês de Referência ativo no filtro: <strong>${mesPrincipal}</strong> · Todas as metas e cálculos foram sincronizados.
+        Meses detectados na base: <strong>${mesesValidos.join(', ')}</strong><br>
+        Mês de Referência ativo no filtro: <strong>${mesMaisRecente}</strong> (mais recente selecionado por padrão).
         ${avisosHtml}
       `;
 
-      // Atualização imediata dos filtros e telas
+      // Atualização imediata dos filtros, banner e telas
+      fnAtualizarBannerMock();
       fnPopularFiltros();
       fnRenderizarAbaAtiva();
 
-      // Sincronização com Supabase usando payload limpo e recuperação automática sem travar importação
+      // Sincronização com Supabase e cache local sem truncamento
       try {
         fnSalvarNoSupabase();
       } catch (errSync) {
@@ -4052,12 +4130,15 @@ parse_Primary(n.content)}catch(l){}a="/EncryptionInfo";n=Qe.find(e,a);if(!n||!n.
       document.getElementById('btnSalvarSupabase').addEventListener('click', fnSalvarNoSupabase);
       document.getElementById('btnRecarregarSupabase').addEventListener('click', fnRecarregarDoSupabase);
       document.getElementById('btnRestaurarMock').addEventListener('click', () => {
-        if (confirm('Deseja restaurar a base de dados padrão?')) {
+        if (confirm('Deseja restaurar a base de dados de demonstração (mock)?')) {
           storeVendas = fnGerarMockPadrao();
+          isUsandoMock = true;
+          localStorage.setItem('base_vendas_is_real', 'false');
+          fnAtualizarBannerMock();
           fnPopularFiltros();
           fnRenderizarAbaAtiva();
           fnSalvarNoSupabase();
-          alert('Mock padrão restaurado com sucesso.');
+          alert('Base de demonstração restaurada.');
         }
       });
 
